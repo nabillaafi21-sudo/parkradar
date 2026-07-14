@@ -3,6 +3,7 @@ import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import { supabase } from './supabaseClient'
 import Auth from './Auth'
+import Profile from './Profile'
 import './app.css'
 
 const TOMTOM_KEY = import.meta.env.VITE_TOMTOM_API_KEY
@@ -34,6 +35,7 @@ export default function App() {
   const [userPos, setUserPos] = useState(null)
   const [radiusKm, setRadiusKm] = useState(3)
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [profileOpen, setProfileOpen] = useState(false)
   const [formType, setFormType] = useState('free')
   const [formName, setFormName] = useState('')
   const [formPrice, setFormPrice] = useState('')
@@ -59,6 +61,18 @@ export default function App() {
     const { data: listener } = supabase.auth.onAuthStateChange((_e, s) => setSession(s))
     return () => listener.subscription.unsubscribe()
   }, [])
+
+  useEffect(() => {
+    if (!session) return
+    supabase
+      .from('profiles')
+      .select('default_radius_km')
+      .eq('id', session.user.id)
+      .single()
+      .then(({ data }) => {
+        if (data?.default_radius_km) setRadiusKm(data.default_radius_km)
+      })
+  }, [session])
 
   useEffect(() => {
     if (!session || leafletMap.current) return
@@ -434,8 +448,8 @@ export default function App() {
             <h1>ParkRadar</h1>
             <p>Connecté en tant que {session.user.email}</p>
           </div>
-          <button className="logout" onClick={() => supabase.auth.signOut()}>
-            Déconnexion
+          <button className="logout" onClick={() => setProfileOpen(true)}>
+            Profil
           </button>
         </div>
 
@@ -584,6 +598,14 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {profileOpen && (
+        <Profile
+          session={session}
+          onClose={() => setProfileOpen(false)}
+          onRadiusPreference={(km) => setRadiusKm(km)}
+        />
       )}
     </div>
   )

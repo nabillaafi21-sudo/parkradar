@@ -121,3 +121,32 @@ header { padding: 22px 20px 16px; background: linear-gradient(180deg, var(--asph
 .leaflet-popup-tip { background: var(--concrete); }
 .leaflet-popup-content { font-family: 'Inter'; font-size: 13px; margin: 10px 12px; }
 .leaflet-popup-content b { font-family: 'Oswald'; }
+
+.profile-overlay { position: fixed; inset: 0; background: var(--asphalt); z-index: 2000; overflow-y: auto; }
+.profile-screen { max-width: 480px; margin: 0 auto; min-height: 100vh; padding-bottom: 40px; }
+.profile-header { display: flex; align-items: center; gap: 14px; padding: 20px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--asphalt); z-index: 10; }
+.profile-header h2 { font-family: 'Oswald'; font-size: 18px; margin: 0; }
+.back-btn { background: none; border: none; color: var(--signal); font-size: 13px; cursor: pointer; padding: 0; }
+.profile-loading { text-align: center; color: var(--ink-dim); padding: 40px; font-size: 13px; }
+.profile-body { padding: 20px; }
+
+.avatar-row { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-bottom: 24px; }
+.avatar-preview { width: 84px; height: 84px; border-radius: 50%; background: var(--concrete); border: 2px solid var(--line); display: flex; align-items: center; justify-content: center; overflow: hidden; font-family: 'Oswald'; font-size: 30px; color: var(--signal); }
+.avatar-preview img { width: 100%; height: 100%; object-fit: cover; }
+.avatar-upload-btn { background: var(--concrete); border: 1px solid var(--line); color: var(--ink); font-size: 12.5px; padding: 8px 14px; border-radius: 8px; cursor: pointer; }
+
+.profile-body .field { margin-bottom: 16px; }
+.profile-body .field label { display: block; font-size: 11.5px; text-transform: uppercase; color: var(--ink-dim); margin-bottom: 6px; }
+.profile-body .field label b { color: var(--signal); font-family: 'JetBrains Mono'; text-transform: none; }
+.profile-body .field input { width: 100%; background: var(--concrete); border: 1px solid var(--line); border-radius: 8px; padding: 11px 12px; color: var(--ink); font-size: 14px; font-family: 'Inter'; }
+.profile-body .field input:disabled { opacity: 0.55; }
+.profile-body .field input[type="range"] { padding: 0; accent-color: var(--signal); }
+
+.profile-msg { font-size: 12px; color: var(--ink-dim); margin: -6px 0 12px; }
+.btn-save.full, .btn-cancel.full { width: 100%; padding: 13px; border-radius: 8px; font-family: 'Oswald'; font-weight: 600; font-size: 14px; cursor: pointer; border: none; margin-bottom: 8px; }
+.btn-save.full { background: var(--signal); color: #1a1a1a; }
+.btn-save.full:disabled { opacity: 0.6; }
+.btn-cancel.full { background: var(--concrete); color: var(--danger); border: 1px solid var(--line) !important; }
+
+.profile-divider { height: 1px; background: var(--line); margin: 26px 0 20px; }
+.profile-body h3 { font-family: 'Oswald'; font-size: 15px; margin: 0 0 14px; }
