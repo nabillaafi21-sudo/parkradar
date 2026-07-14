@@ -202,7 +202,7 @@ export default function App() {
             const tags = el.tags || {}
             const isLane = tags['parking:lane:both'] || tags['parking:lane:left'] || tags['parking:lane:right']
             const fee = tags.fee
-            const type = isLane ? 'free' : fee === 'no' ? 'free' : 'paid'
+            const type = isLane ? 'free' : fee === 'no' ? 'free' : fee === 'yes' ? 'paid' : 'unknown'
             return {
               id: 'osm_' + el.type + el.id,
               name: tags.name || (isLane ? 'Stationnement en rue' : 'Parking'),
@@ -240,7 +240,7 @@ export default function App() {
               return {
                 id: 'tomtom_' + r.id,
                 name: r.poi?.name || 'Parking',
-                type: 'paid',
+                type: 'unknown',
                 price: '',
                 lat,
                 lng,
