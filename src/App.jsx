@@ -5,6 +5,8 @@ import { supabase } from './supabaseClient'
 import Auth from './Auth'
 import './app.css'
 
+const TOMTOM_KEY = import.meta.env.VITE_TOMTOM_API_KEY
+
 function haversine(lat1, lon1, lat2, lon2) {
   const R = 6371000
   const toRad = (d) => (d * Math.PI) / 180
@@ -93,7 +95,7 @@ export default function App() {
   }
 
   function addMarker(spot) {
-    const color = spot.type === 'free' ? '#4cc38a' : '#ef9d4e'
+    const color = spot.type === 'free' ? '#4cc38a' : spot.type === 'paid' ? '#ef9d4e' : '#a7a49b'
     const icon = L.divIcon({
       className: '',
       html: `<div style="width:22px;height:22px;border-radius:50% 50% 50% 0;background:${color};transform:rotate(-45deg);border:2px solid #16181c;display:flex;align-items:center;justify-content:center;"><span style="transform:rotate(45deg);color:#16181c;font-weight:700;font-size:11px;font-family:Oswald;">P</span></div>`,
@@ -102,7 +104,8 @@ export default function App() {
     })
     const marker = L.marker([spot.lat, spot.lng], { icon }).addTo(leafletMap.current)
     const priceText = spot.price ? ` — ${spot.price}` : ''
-    marker.bindPopup(`<b>${spot.name}</b><br>${spot.type === 'free' ? 'Gratuit' : 'Payant'}${priceText}`)
+    const typeLabel = spot.type === 'free' ? 'Gratuit' : spot.type === 'paid' ? 'Payant' : 'Type non précisé'
+    marker.bindPopup(`<b>${spot.name}</b><br>${typeLabel}${priceText}`)
     markersRef.current.push(marker)
   }
 
@@ -172,6 +175,7 @@ export default function App() {
     }
 
     let osmSpots = []
+    let osmFailed = false
     try {
       const query = `[out:json][timeout:25];(
         node["amenity"="parking"](around:${radiusMeters},${pt.lat},${pt.lng});
@@ -183,7 +187,8 @@ export default function App() {
       );out center 80;`
       const res = await fetch('https://overpass-api.de/api/interpreter', {
         method: 'POST',
-        body: 'data=' + encodeURIComponent(query),
+        headers: { 'Content-Type': 'text/plain' },
+        body: query,
       })
       if (res.ok) {
         const json = await res.json()
@@ -208,15 +213,53 @@ export default function App() {
             }
           })
           .filter(Boolean)
+      } else {
+        osmFailed = true
       }
     } catch (e) {
-      // on garde les résultats communautaires même si OSM échoue
+      osmFailed = true
     }
 
-    const all = [...dbSpots, ...osmSpots].sort((a, b) => a._dist - b._dist)
+    let tomtomSpots = []
+    if (TOMTOM_KEY) {
+      try {
+        const ttRes = await fetch(
+          `https://api.tomtom.com/search/2/nearbySearch/.json?key=${encodeURIComponent(TOMTOM_KEY)}&lat=${pt.lat}&lon=${pt.lng}&radius=${radiusMeters}&categorySet=7369&limit=100`
+        )
+        if (ttRes.ok) {
+          const ttJson = await ttRes.json()
+          tomtomSpots = (ttJson.results || [])
+            .map((r) => {
+              const lat = r.position?.lat
+              const lng = r.position?.lon
+              if (!lat || !lng) return null
+              const alreadyKnown = osmSpots.some((s) => haversine(s.lat, s.lng, lat, lng) < 40)
+              if (alreadyKnown) return null
+              return {
+                id: 'tomtom_' + r.id,
+                name: r.poi?.name || 'Parking',
+                type: 'unknown',
+                price: '',
+                lat,
+                lng,
+                source: 'tomtom',
+                _dist: haversine(pt.lat, pt.lng, lat, lng),
+              }
+            })
+            .filter(Boolean)
+        }
+      } catch (e) {
+        // on garde les autres résultats même si TomTom échoue
+      }
+    }
+
+    const all = [...dbSpots, ...osmSpots, ...tomtomSpots].sort((a, b) => a._dist - b._dist)
     all.forEach(addMarker)
     setSpots(all)
-    if (all.length === 0) {
+    if (all.length === 0 && osmFailed) {
+      setStatus('La recherche OpenStreetMap a échoué (problème réseau). Réessaie dans un instant.')
+      setStatusErr(true)
+    } else if (all.length === 0) {
       setStatus('Aucun emplacement trouvé dans ce rayon. Essaie un rayon plus large, ou signale-en un avec le bouton +.')
       setStatusErr(true)
     } else {
@@ -376,6 +419,7 @@ export default function App() {
       <div className="legend">
         <span><i className="dot free"></i>Gratuit</span>
         <span><i className="dot paid"></i>Payant</span>
+        <span><i className="dot unknown"></i>Non précisé</span>
         <span><i className="dot you"></i>Toi</span>
       </div>
 
@@ -390,9 +434,12 @@ export default function App() {
                 <div className="ticket-info">
                   <p className="name">{s.name}</p>
                   <div className="meta">
-                    <span className={`tag ${s.type}`}>{s.type === 'free' ? 'Gratuit' : 'Payant'}</span>
+                    <span className={`tag ${s.type}`}>
+                      {s.type === 'free' ? 'Gratuit' : s.type === 'paid' ? 'Payant' : 'Type non précisé'}
+                    </span>
                     {s.price && <span>{s.price}</span>}
                     {s.source === 'community' && <span>Communauté</span>}
+                    {s.source === 'tomtom' && <span>TomTom</span>}
                   </div>
                 </div>
                 <div className="dist">
