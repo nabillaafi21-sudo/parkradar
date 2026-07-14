@@ -1,0 +1,334 @@
+import { useEffect, useRef, useState } from 'react'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
+import { supabase } from './supabaseClient'
+import Auth from './Auth'
+import './app.css'
+
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371000
+  const toRad = (d) => (d * Math.PI) / 180
+  const dLat = toRad(lat2 - lat1)
+  const dLon = toRad(lon2 - lon1)
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function formatDist(m) {
+  if (m < 1000) return Math.round(m) + ' m'
+  return (m / 1000).toFixed(1) + ' km'
+}
+
+export default function App() {
+  const [session, setSession] = useState(null)
+  const [checkingSession, setCheckingSession] = useState(true)
+  const [status, setStatus] = useState('En attente de localisation…')
+  const [statusErr, setStatusErr] = useState(false)
+  const [locating, setLocating] = useState(false)
+  const [spots, setSpots] = useState([])
+  const [userPos, setUserPos] = useState(null)
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const [formType, setFormType] = useState('free')
+  const [formName, setFormName] = useState('')
+  const [formPrice, setFormPrice] = useState('')
+
+  const mapRef = useRef(null)
+  const leafletMap = useRef(null)
+  const userMarkerRef = useRef(null)
+  const markersRef = useRef([])
+  const pendingLatLng = useRef(null)
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session)
+      setCheckingSession(false)
+    })
+    const { data: listener } = supabase.auth.onAuthStateChange((_e, s) => setSession(s))
+    return () => listener.subscription.unsubscribe()
+  }, [])
+
+  useEffect(() => {
+    if (!session || leafletMap.current) return
+    const map = L.map(mapRef.current, { zoomControl: false }).setView([48.8566, 2.3522], 13)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap &copy; CARTO',
+    }).addTo(map)
+    L.control.zoom({ position: 'bottomright' }).addTo(map)
+    map.on('click', (e) => {
+      pendingLatLng.current = e.latlng
+      setSheetOpen(true)
+    })
+    leafletMap.current = map
+  }, [session])
+
+  function addMarker(spot) {
+    const color = spot.type === 'free' ? '#4cc38a' : '#ef9d4e'
+    const icon = L.divIcon({
+      className: '',
+      html: `<div style="width:22px;height:22px;border-radius:50% 50% 50% 0;background:${color};transform:rotate(-45deg);border:2px solid #16181c;display:flex;align-items:center;justify-content:center;"><span style="transform:rotate(45deg);color:#16181c;font-weight:700;font-size:11px;font-family:Oswald;">P</span></div>`,
+      iconSize: [22, 22],
+      iconAnchor: [11, 22],
+    })
+    const marker = L.marker([spot.lat, spot.lng], { icon }).addTo(leafletMap.current)
+    const priceText = spot.price ? ` — ${spot.price}` : ''
+    marker.bindPopup(`<b>${spot.name}</b><br>${spot.type === 'free' ? 'Gratuit' : 'Payant'}${priceText}`)
+    markersRef.current.push(marker)
+  }
+
+  function clearMarkers() {
+    markersRef.current.forEach((m) => leafletMap.current.removeLayer(m))
+    markersRef.current = []
+  }
+
+  async function locateUser() {
+    if (!navigator.geolocation) {
+      setStatus("La géolocalisation n'est pas supportée par ce navigateur.")
+      setStatusErr(true)
+      return
+    }
+    setLocating(true)
+    setStatus('Recherche de ta position GPS…')
+    setStatusErr(false)
+
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const pt = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+        setUserPos(pt)
+        leafletMap.current.setView([pt.lat, pt.lng], 16)
+        if (userMarkerRef.current) leafletMap.current.removeLayer(userMarkerRef.current)
+        userMarkerRef.current = L.circleMarker([pt.lat, pt.lng], {
+          radius: 8,
+          color: '#4a9eff',
+          fillColor: '#4a9eff',
+          fillOpacity: 0.9,
+          weight: 2,
+        })
+          .addTo(leafletMap.current)
+          .bindPopup('<b>Toi</b>')
+
+        setStatus('Recherche des parkings à proximité…')
+        await searchNearby(pt)
+        setLocating(false)
+      },
+      (err) => {
+        setLocating(false)
+        const messages = {
+          1: 'Accès à la position refusé. Autorise la géolocalisation dans les réglages du navigateur.',
+          2: 'Position indisponible. Vérifie ta connexion ou réessaie.',
+          3: 'La demande de localisation a expiré. Réessaie.',
+        }
+        setStatus(messages[err.code] || 'Impossible de récupérer ta position.')
+        setStatusErr(true)
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+    )
+  }
+
+  async function searchNearby(pt) {
+    clearMarkers()
+    let dbSpots = []
+    const { data, error } = await supabase.rpc('parkings_nearby', {
+      user_lat: pt.lat,
+      user_lng: pt.lng,
+      radius_m: 2000,
+    })
+    if (!error && data) {
+      dbSpots = data.map((d) => ({ ...d, source: 'community', _dist: d.distance_m }))
+    }
+
+    let osmSpots = []
+    try {
+      const radius = 1200
+      const query = `[out:json][timeout:15];(node["amenity"="parking"](around:${radius},${pt.lat},${pt.lng});way["amenity"="parking"](around:${radius},${pt.lat},${pt.lng}););out center 40;`
+      const res = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        body: 'data=' + encodeURIComponent(query),
+      })
+      if (res.ok) {
+        const json = await res.json()
+        osmSpots = json.elements
+          .map((el) => {
+            const lat = el.lat || el.center?.lat
+            const lng = el.lon || el.center?.lon
+            if (!lat || !lng) return null
+            const tags = el.tags || {}
+            const fee = tags.fee
+            const type = fee === 'no' ? 'free' : fee === 'yes' ? 'paid' : 'free'
+            return {
+              id: 'osm_' + el.id,
+              name: tags.name || 'Parking',
+              type,
+              price: tags['fee:conditional'] || '',
+              lat,
+              lng,
+              source: 'osm',
+              _dist: haversine(pt.lat, pt.lng, lat, lng),
+            }
+          })
+          .filter(Boolean)
+      }
+    } catch (e) {
+      // silencieux, on garde les résultats communautaires
+    }
+
+    const all = [...dbSpots, ...osmSpots].sort((a, b) => a._dist - b._dist)
+    all.forEach(addMarker)
+    setSpots(all)
+    setStatus(`${all.length} parking(s) trouvé(s) autour de toi.`)
+    setStatusErr(false)
+  }
+
+  async function saveParking() {
+    const latlng = pendingLatLng.current || userPos
+    if (!latlng) {
+      setStatus('Choisis un emplacement sur la carte ou active le GPS.')
+      setStatusErr(true)
+      setSheetOpen(false)
+      return
+    }
+    const name = formName.trim() || 'Parking sans nom'
+    const { error } = await supabase.from('parkings').insert({
+      name,
+      type: formType,
+      price: formType === 'paid' ? formPrice.trim() : null,
+      lat: latlng.lat,
+      lng: latlng.lng,
+      created_by: session.user.id,
+    })
+    if (error) {
+      setStatus("Erreur lors de l'ajout : " + error.message)
+      setStatusErr(true)
+    } else {
+      addMarker({ name, type: formType, price: formPrice, lat: latlng.lat, lng: latlng.lng })
+      setSpots((prev) =>
+        [
+          ...prev,
+          {
+            name,
+            type: formType,
+            price: formPrice,
+            lat: latlng.lat,
+            lng: latlng.lng,
+            source: 'community',
+            _dist: userPos ? haversine(userPos.lat, userPos.lng, latlng.lat, latlng.lng) : 0,
+          },
+        ].sort((a, b) => a._dist - b._dist)
+      )
+    }
+    pendingLatLng.current = null
+    setFormName('')
+    setFormPrice('')
+    setFormType('free')
+    setSheetOpen(false)
+  }
+
+  if (checkingSession) return null
+  if (!session) return <Auth onAuthed={setSession} />
+
+  return (
+    <div id="app">
+      <header>
+        <div className="brand">
+          <div className="brand-mark">P</div>
+          <div className="brand-text">
+            <h1>ParkRadar</h1>
+            <p>Connecté en tant que {session.user.email}</p>
+          </div>
+          <button className="logout" onClick={() => supabase.auth.signOut()}>
+            Déconnexion
+          </button>
+        </div>
+        <div className="locate-bar">
+          <button id="locateBtn" onClick={locateUser} disabled={locating}>
+            <span className={`radar ${locating ? 'spin' : ''}`}></span>
+            <span>{locating ? 'Localisation…' : 'Activer le GPS'}</span>
+          </button>
+        </div>
+        <div className={`status ${statusErr ? 'err' : ''}`}>{status}</div>
+      </header>
+
+      <div className="map-wrap">
+        <div ref={mapRef} id="map"></div>
+        <div className="map-hint">Touche la carte pour signaler un parking</div>
+      </div>
+
+      <div className="legend">
+        <span><i className="dot free"></i>Gratuit</span>
+        <span><i className="dot paid"></i>Payant</span>
+        <span><i className="dot you"></i>Toi</span>
+      </div>
+
+      <div id="list">
+        {spots.length === 0 ? (
+          <div className="empty">Active ta position pour voir les parkings les plus proches.</div>
+        ) : (
+          spots.map((s) => (
+            <div className="ticket" key={s.id || s.name + s.lat}>
+              <div className="ticket-top">
+                <div className={`p-badge ${s.type}`}>P</div>
+                <div className="ticket-info">
+                  <p className="name">{s.name}</p>
+                  <div className="meta">
+                    <span className={`tag ${s.type}`}>{s.type === 'free' ? 'Gratuit' : 'Payant'}</span>
+                    {s.price && <span>{s.price}</span>}
+                    {s.source === 'community' && <span>Communauté</span>}
+                  </div>
+                </div>
+                <div className="dist">
+                  {formatDist(s._dist)}
+                  <small>{Math.max(1, Math.round(s._dist / 80))} min</small>
+                </div>
+              </div>
+              <div className="ticket-torn"></div>
+            </div>
+          ))
+        )}
+      </div>
+
+      <div className="fab" onClick={() => setSheetOpen(true)}>
+        +
+      </div>
+
+      {sheetOpen && (
+        <div className="sheet-overlay open" onClick={(e) => e.target === e.currentTarget && setSheetOpen(false)}>
+          <div className="sheet">
+            <h2>Signaler un parking</h2>
+            <p className="hint">Touche la carte pour choisir l'emplacement, puis remplis le formulaire.</p>
+            <div className="field">
+              <label>Nom / rue</label>
+              <input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="Ex. Parking Rue de la Paix" />
+            </div>
+            <div className="field">
+              <label>Type</label>
+              <div className="type-toggle">
+                <button type="button" className={formType === 'free' ? 'active free' : ''} onClick={() => setFormType('free')}>
+                  Gratuit
+                </button>
+                <button type="button" className={formType === 'paid' ? 'active paid' : ''} onClick={() => setFormType('paid')}>
+                  Payant
+                </button>
+              </div>
+            </div>
+            {formType === 'paid' && (
+              <div className="field">
+                <label>Tarif</label>
+                <input value={formPrice} onChange={(e) => setFormPrice(e.target.value)} placeholder="Ex. 2€/h" />
+              </div>
+            )}
+            <div className="sheet-actions">
+              <button className="btn-cancel" onClick={() => setSheetOpen(false)}>
+                Annuler
+              </button>
+              <button className="btn-save" onClick={saveParking}>
+                Ajouter
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
