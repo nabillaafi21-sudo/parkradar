@@ -133,52 +133,70 @@ export default function App() {
     const { data, error } = await supabase.rpc('parkings_nearby', {
       user_lat: pt.lat,
       user_lng: pt.lng,
-      radius_m: 2000,
+      radius_m: 5000,
     })
     if (!error && data) {
       dbSpots = data.map((d) => ({ ...d, source: 'community', _dist: d.distance_m }))
     }
 
+    const radiusSteps = [2000, 5000, 10000]
     let osmSpots = []
-    try {
-      const radius = 1200
-      const query = `[out:json][timeout:15];(node["amenity"="parking"](around:${radius},${pt.lat},${pt.lng});way["amenity"="parking"](around:${radius},${pt.lat},${pt.lng}););out center 40;`
-      const res = await fetch('https://overpass-api.de/api/interpreter', {
-        method: 'POST',
-        body: 'data=' + encodeURIComponent(query),
-      })
-      if (res.ok) {
-        const json = await res.json()
-        osmSpots = json.elements
-          .map((el) => {
-            const lat = el.lat || el.center?.lat
-            const lng = el.lon || el.center?.lon
-            if (!lat || !lng) return null
-            const tags = el.tags || {}
-            const fee = tags.fee
-            const type = fee === 'no' ? 'free' : fee === 'yes' ? 'paid' : 'free'
-            return {
-              id: 'osm_' + el.id,
-              name: tags.name || 'Parking',
-              type,
-              price: tags['fee:conditional'] || '',
-              lat,
-              lng,
-              source: 'osm',
-              _dist: haversine(pt.lat, pt.lng, lat, lng),
-            }
-          })
-          .filter(Boolean)
+
+    for (const radius of radiusSteps) {
+      setStatus(`Recherche des parkings dans un rayon de ${radius / 1000} km…`)
+      try {
+        const query = `[out:json][timeout:25];(
+          node["amenity"="parking"](around:${radius},${pt.lat},${pt.lng});
+          way["amenity"="parking"](around:${radius},${pt.lat},${pt.lng});
+          node["amenity"="parking_space"](around:${radius},${pt.lat},${pt.lng});
+          way["parking:lane:both"](around:${radius},${pt.lat},${pt.lng});
+          way["parking:lane:left"](around:${radius},${pt.lat},${pt.lng});
+          way["parking:lane:right"](around:${radius},${pt.lat},${pt.lng});
+        );out center 80;`
+        const res = await fetch('https://overpass-api.de/api/interpreter', {
+          method: 'POST',
+          body: 'data=' + encodeURIComponent(query),
+        })
+        if (res.ok) {
+          const json = await res.json()
+          osmSpots = json.elements
+            .map((el) => {
+              const lat = el.lat || el.center?.lat
+              const lng = el.lon || el.center?.lng || el.center?.lon
+              if (!lat || !lng) return null
+              const tags = el.tags || {}
+              const isLane = tags['parking:lane:both'] || tags['parking:lane:left'] || tags['parking:lane:right']
+              const fee = tags.fee
+              const type = isLane ? 'free' : fee === 'no' ? 'free' : fee === 'yes' ? 'paid' : 'free'
+              return {
+                id: 'osm_' + el.type + el.id,
+                name: tags.name || (isLane ? 'Stationnement en rue' : 'Parking'),
+                type,
+                price: tags['fee:conditional'] || '',
+                lat,
+                lng,
+                source: isLane ? 'osm_lane' : 'osm',
+                _dist: haversine(pt.lat, pt.lng, lat, lng),
+              }
+            })
+            .filter(Boolean)
+        }
+      } catch (e) {
+        // on continue vers le rayon suivant même en cas d'échec réseau
       }
-    } catch (e) {
-      // silencieux, on garde les résultats communautaires
+      if (osmSpots.length > 0) break
     }
 
     const all = [...dbSpots, ...osmSpots].sort((a, b) => a._dist - b._dist)
     all.forEach(addMarker)
     setSpots(all)
-    setStatus(`${all.length} parking(s) trouvé(s) autour de toi.`)
-    setStatusErr(false)
+    if (all.length === 0) {
+      setStatus("Aucun parking référencé même dans un large rayon. Sois le premier à en signaler un avec le bouton +.")
+      setStatusErr(true)
+    } else {
+      setStatus(`${all.length} emplacement(s) trouvé(s) autour de toi.`)
+      setStatusErr(false)
+    }
   }
 
   async function saveParking() {
