@@ -49,6 +49,7 @@ export default function App() {
   const pendingMarkerRef = useRef(null)
   const confirmingSpotId = useRef(null)
   const addressDebounce = useRef(null)
+  const radiusCircleRef = useRef(null)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -269,6 +270,31 @@ export default function App() {
     }
   }
 
+  useEffect(() => {
+    if (!leafletMap.current || !userPos) return
+    if (radiusCircleRef.current) leafletMap.current.removeLayer(radiusCircleRef.current)
+    radiusCircleRef.current = L.circle([userPos.lat, userPos.lng], {
+      radius: radiusKm * 1000,
+      color: '#f4c430',
+      weight: 1.5,
+      fillColor: '#f4c430',
+      fillOpacity: 0.06,
+    }).addTo(leafletMap.current)
+  }, [radiusKm, userPos])
+
+  function focusSpot(spot) {
+    if (!leafletMap.current) return
+    leafletMap.current.setView([spot.lat, spot.lng], 17)
+    const marker = markersRef.current.find(
+      (m) => Math.abs(m.getLatLng().lat - spot.lat) < 0.00001 && Math.abs(m.getLatLng().lng - spot.lng) < 0.00001
+    )
+    if (marker) marker.openPopup()
+  }
+
+  function directionsUrl(spot) {
+    return `https://www.google.com/maps/dir/?api=1&destination=${spot.lat},${spot.lng}&travelmode=walking`
+  }
+
   function rerunSearch() {
     if (!userPos) {
       setStatus('Active le GPS pour lancer une recherche.')
@@ -308,15 +334,30 @@ export default function App() {
     setAddressQuery(result.display_name)
   }
 
-  function useMyPosition() {
+  async function useMyPosition() {
     if (!userPos) {
       setStatus('Active le GPS pour utiliser ta position actuelle.')
       setStatusErr(true)
       return
     }
     setPending(userPos)
-    setAddressQuery('')
     setAddressResults([])
+    setAddressQuery('Recherche de ton adresse…')
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${userPos.lat}&lon=${userPos.lng}`
+      )
+      const json = await res.json()
+      const addr = json.address || {}
+      const road = addr.road || addr.pedestrian || addr.footway || ''
+      const houseNumber = addr.house_number || ''
+      const city = addr.city || addr.town || addr.village || ''
+      const composedName = [road, houseNumber].filter(Boolean).join(' ')
+      setAddressQuery(json.display_name || '')
+      setFormName(composedName || city || 'Parking sans nom')
+    } catch (e) {
+      setAddressQuery('')
+    }
   }
 
   function confirmSpot(spot) {
@@ -438,7 +479,7 @@ export default function App() {
         ) : (
           spots.map((s) => (
             <div className="ticket" key={s.id || s.name + s.lat}>
-              <div className="ticket-top">
+              <div className="ticket-top" onClick={() => focusSpot(s)}>
                 <div className={`p-badge ${s.type}`}>P</div>
                 <div className="ticket-info">
                   <p className="name">{s.name}</p>
@@ -456,6 +497,15 @@ export default function App() {
                   <small>{Math.max(1, Math.round(s._dist / 80))} min</small>
                 </div>
               </div>
+              <a
+                className="directions-btn"
+                href={directionsUrl(s)}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(e) => e.stopPropagation()}
+              >
+                Itinéraire
+              </a>
               <div className="ticket-torn"></div>
             </div>
           ))
