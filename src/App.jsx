@@ -26,19 +26,26 @@ export default function App() {
   const [checkingSession, setCheckingSession] = useState(true)
   const [status, setStatus] = useState('En attente de localisation…')
   const [statusErr, setStatusErr] = useState(false)
-  const [locating, setLocating] = useState(false)
+  const [tracking, setTracking] = useState(false)
   const [spots, setSpots] = useState([])
   const [userPos, setUserPos] = useState(null)
+  const [radiusKm, setRadiusKm] = useState(3)
   const [sheetOpen, setSheetOpen] = useState(false)
   const [formType, setFormType] = useState('free')
   const [formName, setFormName] = useState('')
   const [formPrice, setFormPrice] = useState('')
+  const [addressQuery, setAddressQuery] = useState('')
+  const [addressResults, setAddressResults] = useState([])
+  const [addressSearching, setAddressSearching] = useState(false)
 
   const mapRef = useRef(null)
   const leafletMap = useRef(null)
   const userMarkerRef = useRef(null)
   const markersRef = useRef([])
   const pendingLatLng = useRef(null)
+  const pendingMarkerRef = useRef(null)
+  const watchIdRef = useRef(null)
+  const addressDebounce = useRef(null)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -58,11 +65,37 @@ export default function App() {
     }).addTo(map)
     L.control.zoom({ position: 'bottomright' }).addTo(map)
     map.on('click', (e) => {
-      pendingLatLng.current = e.latlng
+      setPending(e.latlng)
       setSheetOpen(true)
     })
     leafletMap.current = map
   }, [session])
+
+  useEffect(() => {
+    return () => {
+      if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current)
+    }
+  }, [])
+
+  function setPending(latlng) {
+    pendingLatLng.current = latlng
+    if (pendingMarkerRef.current) leafletMap.current.removeLayer(pendingMarkerRef.current)
+    pendingMarkerRef.current = L.circleMarker(latlng, {
+      radius: 9,
+      color: '#f4c430',
+      fillColor: '#f4c430',
+      fillOpacity: 0.85,
+      weight: 2,
+    }).addTo(leafletMap.current)
+  }
+
+  function clearPending() {
+    pendingLatLng.current = null
+    if (pendingMarkerRef.current) {
+      leafletMap.current.removeLayer(pendingMarkerRef.current)
+      pendingMarkerRef.current = null
+    }
+  }
 
   function addMarker(spot) {
     const color = spot.type === 'free' ? '#4cc38a' : '#ef9d4e'
@@ -83,21 +116,27 @@ export default function App() {
     markersRef.current = []
   }
 
-  async function locateUser() {
+  function toggleTracking() {
+    if (tracking) {
+      if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current)
+      watchIdRef.current = null
+      setTracking(false)
+      setStatus('Suivi GPS arrêté.')
+      setStatusErr(false)
+      return
+    }
     if (!navigator.geolocation) {
       setStatus("La géolocalisation n'est pas supportée par ce navigateur.")
       setStatusErr(true)
       return
     }
-    setLocating(true)
-    setStatus('Recherche de ta position GPS…')
+    setStatus('Activation du GPS en continu…')
     setStatusErr(false)
-
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
+    let firstFix = true
+    const id = navigator.geolocation.watchPosition(
+      (pos) => {
         const pt = { lat: pos.coords.latitude, lng: pos.coords.longitude }
         setUserPos(pt)
-        leafletMap.current.setView([pt.lat, pt.lng], 16)
         if (userMarkerRef.current) leafletMap.current.removeLayer(userMarkerRef.current)
         userMarkerRef.current = L.circleMarker([pt.lat, pt.lng], {
           radius: 8,
@@ -108,13 +147,13 @@ export default function App() {
         })
           .addTo(leafletMap.current)
           .bindPopup('<b>Toi</b>')
-
-        setStatus('Recherche des parkings à proximité…')
-        await searchNearby(pt)
-        setLocating(false)
+        if (firstFix) {
+          leafletMap.current.setView([pt.lat, pt.lng], 16)
+          searchNearby(pt, radiusKm * 1000)
+          firstFix = false
+        }
       },
       (err) => {
-        setLocating(false)
         const messages = {
           1: 'Accès à la position refusé. Autorise la géolocalisation dans les réglages du navigateur.',
           2: 'Position indisponible. Vérifie ta connexion ou réessaie.',
@@ -123,88 +162,136 @@ export default function App() {
         setStatus(messages[err.code] || 'Impossible de récupérer ta position.')
         setStatusErr(true)
       },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
     )
+    watchIdRef.current = id
+    setTracking(true)
   }
 
-  async function searchNearby(pt) {
+  async function searchNearby(pt, radiusMeters) {
     clearMarkers()
+    setStatus(`Recherche dans un rayon de ${(radiusMeters / 1000).toFixed(1)} km…`)
+    setStatusErr(false)
+
     let dbSpots = []
     const { data, error } = await supabase.rpc('parkings_nearby', {
       user_lat: pt.lat,
       user_lng: pt.lng,
-      radius_m: 5000,
+      radius_m: radiusMeters,
     })
     if (!error && data) {
       dbSpots = data.map((d) => ({ ...d, source: 'community', _dist: d.distance_m }))
     }
 
-    const radiusSteps = [2000, 5000, 10000]
     let osmSpots = []
-
-    for (const radius of radiusSteps) {
-      setStatus(`Recherche des parkings dans un rayon de ${radius / 1000} km…`)
-      try {
-        const query = `[out:json][timeout:25];(
-          node["amenity"="parking"](around:${radius},${pt.lat},${pt.lng});
-          way["amenity"="parking"](around:${radius},${pt.lat},${pt.lng});
-          node["amenity"="parking_space"](around:${radius},${pt.lat},${pt.lng});
-          way["parking:lane:both"](around:${radius},${pt.lat},${pt.lng});
-          way["parking:lane:left"](around:${radius},${pt.lat},${pt.lng});
-          way["parking:lane:right"](around:${radius},${pt.lat},${pt.lng});
-        );out center 80;`
-        const res = await fetch('https://overpass-api.de/api/interpreter', {
-          method: 'POST',
-          body: 'data=' + encodeURIComponent(query),
-        })
-        if (res.ok) {
-          const json = await res.json()
-          osmSpots = json.elements
-            .map((el) => {
-              const lat = el.lat || el.center?.lat
-              const lng = el.lon || el.center?.lng || el.center?.lon
-              if (!lat || !lng) return null
-              const tags = el.tags || {}
-              const isLane = tags['parking:lane:both'] || tags['parking:lane:left'] || tags['parking:lane:right']
-              const fee = tags.fee
-              const type = isLane ? 'free' : fee === 'no' ? 'free' : fee === 'yes' ? 'paid' : 'free'
-              return {
-                id: 'osm_' + el.type + el.id,
-                name: tags.name || (isLane ? 'Stationnement en rue' : 'Parking'),
-                type,
-                price: tags['fee:conditional'] || '',
-                lat,
-                lng,
-                source: isLane ? 'osm_lane' : 'osm',
-                _dist: haversine(pt.lat, pt.lng, lat, lng),
-              }
-            })
-            .filter(Boolean)
-        }
-      } catch (e) {
-        // on continue vers le rayon suivant même en cas d'échec réseau
+    try {
+      const query = `[out:json][timeout:25];(
+        node["amenity"="parking"](around:${radiusMeters},${pt.lat},${pt.lng});
+        way["amenity"="parking"](around:${radiusMeters},${pt.lat},${pt.lng});
+        node["amenity"="parking_space"](around:${radiusMeters},${pt.lat},${pt.lng});
+        way["parking:lane:both"](around:${radiusMeters},${pt.lat},${pt.lng});
+        way["parking:lane:left"](around:${radiusMeters},${pt.lat},${pt.lng});
+        way["parking:lane:right"](around:${radiusMeters},${pt.lat},${pt.lng});
+      );out center 80;`
+      const res = await fetch('https://overpass-api.de/api/interpreter', {
+        method: 'POST',
+        body: 'data=' + encodeURIComponent(query),
+      })
+      if (res.ok) {
+        const json = await res.json()
+        osmSpots = json.elements
+          .map((el) => {
+            const lat = el.lat || el.center?.lat
+            const lng = el.lon || el.center?.lng || el.center?.lon
+            if (!lat || !lng) return null
+            const tags = el.tags || {}
+            const isLane = tags['parking:lane:both'] || tags['parking:lane:left'] || tags['parking:lane:right']
+            const fee = tags.fee
+            const type = isLane ? 'free' : fee === 'no' ? 'free' : fee === 'yes' ? 'paid' : 'free'
+            return {
+              id: 'osm_' + el.type + el.id,
+              name: tags.name || (isLane ? 'Stationnement en rue' : 'Parking'),
+              type,
+              price: tags['fee:conditional'] || '',
+              lat,
+              lng,
+              source: isLane ? 'osm_lane' : 'osm',
+              _dist: haversine(pt.lat, pt.lng, lat, lng),
+            }
+          })
+          .filter(Boolean)
       }
-      if (osmSpots.length > 0) break
+    } catch (e) {
+      // on garde les résultats communautaires même si OSM échoue
     }
 
     const all = [...dbSpots, ...osmSpots].sort((a, b) => a._dist - b._dist)
     all.forEach(addMarker)
     setSpots(all)
     if (all.length === 0) {
-      setStatus("Aucun parking référencé même dans un large rayon. Sois le premier à en signaler un avec le bouton +.")
+      setStatus('Aucun emplacement trouvé dans ce rayon. Essaie un rayon plus large, ou signale-en un avec le bouton +.')
       setStatusErr(true)
     } else {
-      setStatus(`${all.length} emplacement(s) trouvé(s) autour de toi.`)
+      setStatus(`${all.length} emplacement(s) trouvé(s) dans un rayon de ${(radiusMeters / 1000).toFixed(1)} km.`)
       setStatusErr(false)
     }
   }
 
-  async function saveParking() {
-    const latlng = pendingLatLng.current || userPos
-    if (!latlng) {
-      setStatus('Choisis un emplacement sur la carte ou active le GPS.')
+  function rerunSearch() {
+    if (!userPos) {
+      setStatus('Active le GPS pour lancer une recherche.')
       setStatusErr(true)
-      setSheetOpen(false)
+      return
+    }
+    searchNearby(userPos, radiusKm * 1000)
+  }
+
+  function searchAddress(q) {
+    setAddressQuery(q)
+    if (addressDebounce.current) clearTimeout(addressDebounce.current)
+    if (q.trim().length < 3) {
+      setAddressResults([])
+      return
+    }
+    addressDebounce.current = setTimeout(async () => {
+      setAddressSearching(true)
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(q)}`
+        )
+        const json = await res.json()
+        setAddressResults(json)
+      } catch (e) {
+        setAddressResults([])
+      }
+      setAddressSearching(false)
+    }, 500)
+  }
+
+  function pickAddress(result) {
+    const latlng = { lat: parseFloat(result.lat), lng: parseFloat(result.lon) }
+    setPending(latlng)
+    leafletMap.current.setView([latlng.lat, latlng.lng], 17)
+    setAddressResults([])
+    setAddressQuery(result.display_name)
+  }
+
+  function useMyPosition() {
+    if (!userPos) {
+      setStatus('Active le GPS pour utiliser ta position actuelle.')
+      setStatusErr(true)
+      return
+    }
+    setPending(userPos)
+    setAddressQuery('')
+    setAddressResults([])
+  }
+
+  async function saveParking() {
+    const latlng = pendingLatLng.current
+    if (!latlng) {
+      setStatus("Choisis un emplacement : recherche une adresse, utilise ta position, ou touche la carte.")
+      setStatusErr(true)
       return
     }
     const name = formName.trim() || 'Parking sans nom'
@@ -236,10 +323,16 @@ export default function App() {
         ].sort((a, b) => a._dist - b._dist)
       )
     }
-    pendingLatLng.current = null
+    closeSheet()
+  }
+
+  function closeSheet() {
+    clearPending()
     setFormName('')
     setFormPrice('')
     setFormType('free')
+    setAddressQuery('')
+    setAddressResults([])
     setSheetOpen(false)
   }
 
@@ -259,12 +352,31 @@ export default function App() {
             Déconnexion
           </button>
         </div>
+
         <div className="locate-bar">
-          <button id="locateBtn" onClick={locateUser} disabled={locating}>
-            <span className={`radar ${locating ? 'spin' : ''}`}></span>
-            <span>{locating ? 'Localisation…' : 'Activer le GPS'}</span>
+          <button id="locateBtn" onClick={toggleTracking} className={tracking ? 'active' : ''}>
+            <span className={`radar ${tracking ? 'spin' : ''}`}></span>
+            <span>{tracking ? 'Suivi GPS actif — arrêter' : 'Activer le GPS'}</span>
           </button>
         </div>
+
+        <div className="radius-control">
+          <label>
+            Rayon de recherche <b>{radiusKm} km</b>
+          </label>
+          <input
+            type="range"
+            min="0.5"
+            max="10"
+            step="0.5"
+            value={radiusKm}
+            onChange={(e) => setRadiusKm(parseFloat(e.target.value))}
+          />
+          <button className="search-btn" onClick={rerunSearch}>
+            Rechercher
+          </button>
+        </div>
+
         <div className={`status ${statusErr ? 'err' : ''}`}>{status}</div>
       </header>
 
@@ -281,7 +393,7 @@ export default function App() {
 
       <div id="list">
         {spots.length === 0 ? (
-          <div className="empty">Active ta position pour voir les parkings les plus proches.</div>
+          <div className="empty">Active ta position pour voir les emplacements les plus proches.</div>
         ) : (
           spots.map((s) => (
             <div className="ticket" key={s.id || s.name + s.lat}>
@@ -311,10 +423,35 @@ export default function App() {
       </div>
 
       {sheetOpen && (
-        <div className="sheet-overlay open" onClick={(e) => e.target === e.currentTarget && setSheetOpen(false)}>
+        <div className="sheet-overlay open" onClick={(e) => e.target === e.currentTarget && closeSheet()}>
           <div className="sheet">
             <h2>Signaler un parking</h2>
-            <p className="hint">Touche la carte pour choisir l'emplacement, puis remplis le formulaire.</p>
+            <p className="hint">Recherche une adresse, utilise ta position, ou touche la carte.</p>
+
+            <div className="field">
+              <label>Adresse</label>
+              <input
+                value={addressQuery}
+                onChange={(e) => searchAddress(e.target.value)}
+                placeholder="Ex. Rue de la Paix, Roosendaal"
+              />
+              {addressSearching && <p className="addr-hint">Recherche…</p>}
+              {addressResults.length > 0 && (
+                <ul className="addr-list">
+                  {addressResults.map((r) => (
+                    <li key={r.place_id}>
+                      <button type="button" onClick={() => pickAddress(r)}>
+                        {r.display_name}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <button type="button" className="use-pos-btn" onClick={useMyPosition}>
+                Utiliser ma position actuelle
+              </button>
+            </div>
+
             <div className="field">
               <label>Nom / rue</label>
               <input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="Ex. Parking Rue de la Paix" />
@@ -337,7 +474,7 @@ export default function App() {
               </div>
             )}
             <div className="sheet-actions">
-              <button className="btn-cancel" onClick={() => setSheetOpen(false)}>
+              <button className="btn-cancel" onClick={closeSheet}>
                 Annuler
               </button>
               <button className="btn-save" onClick={saveParking}>
