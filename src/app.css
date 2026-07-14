@@ -33,14 +33,12 @@ header { padding: 22px 20px 16px; background: linear-gradient(180deg, var(--asph
 
 .locate-bar { display: flex; gap: 8px; margin-top: 16px; }
 #locateBtn { flex: 1; background: var(--signal); color: #1a1a1a; border: none; border-radius: 8px; padding: 13px 16px; font-family: 'Oswald'; font-weight: 600; font-size: 14.5px; text-transform: uppercase; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; }
-#locateBtn:disabled { opacity: 0.6; }
+#locateBtn:disabled { opacity: 0.55; cursor: default; }
 .radar { width: 16px; height: 16px; border: 2px solid #1a1a1a; border-radius: 50%; }
 .radar.spin { animation: spin 0.9s linear infinite; border-top-color: transparent; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .status { font-size: 12px; color: var(--ink-dim); margin-top: 10px; min-height: 16px; font-family: 'JetBrains Mono'; }
 .status.err { color: var(--danger); }
-
-#locateBtn.active { background: var(--free); }
 
 .radius-control { margin-top: 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .radius-control label { font-size: 12px; color: var(--ink-dim); flex-shrink: 0; }

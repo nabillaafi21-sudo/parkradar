@@ -26,7 +26,8 @@ export default function App() {
   const [checkingSession, setCheckingSession] = useState(true)
   const [status, setStatus] = useState('En attente de localisation…')
   const [statusErr, setStatusErr] = useState(false)
-  const [tracking, setTracking] = useState(false)
+  const [locating, setLocating] = useState(false)
+  const [located, setLocated] = useState(false)
   const [spots, setSpots] = useState([])
   const [userPos, setUserPos] = useState(null)
   const [radiusKm, setRadiusKm] = useState(3)
@@ -44,7 +45,6 @@ export default function App() {
   const markersRef = useRef([])
   const pendingLatLng = useRef(null)
   const pendingMarkerRef = useRef(null)
-  const watchIdRef = useRef(null)
   const addressDebounce = useRef(null)
 
   useEffect(() => {
@@ -71,11 +71,6 @@ export default function App() {
     leafletMap.current = map
   }, [session])
 
-  useEffect(() => {
-    return () => {
-      if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current)
-    }
-  }, [])
 
   function setPending(latlng) {
     pendingLatLng.current = latlng
@@ -116,27 +111,22 @@ export default function App() {
     markersRef.current = []
   }
 
-  function toggleTracking() {
-    if (tracking) {
-      if (watchIdRef.current != null) navigator.geolocation.clearWatch(watchIdRef.current)
-      watchIdRef.current = null
-      setTracking(false)
-      setStatus('Suivi GPS arrêté.')
-      setStatusErr(false)
-      return
-    }
+  function locateOnce() {
+    if (located || locating) return
     if (!navigator.geolocation) {
       setStatus("La géolocalisation n'est pas supportée par ce navigateur.")
       setStatusErr(true)
       return
     }
-    setStatus('Activation du GPS en continu…')
+    setLocating(true)
+    setStatus('Recherche de ta position GPS…')
     setStatusErr(false)
-    let firstFix = true
-    const id = navigator.geolocation.watchPosition(
+
+    navigator.geolocation.getCurrentPosition(
       (pos) => {
         const pt = { lat: pos.coords.latitude, lng: pos.coords.longitude }
         setUserPos(pt)
+        leafletMap.current.setView([pt.lat, pt.lng], 16)
         if (userMarkerRef.current) leafletMap.current.removeLayer(userMarkerRef.current)
         userMarkerRef.current = L.circleMarker([pt.lat, pt.lng], {
           radius: 8,
@@ -147,13 +137,13 @@ export default function App() {
         })
           .addTo(leafletMap.current)
           .bindPopup('<b>Toi</b>')
-        if (firstFix) {
-          leafletMap.current.setView([pt.lat, pt.lng], 16)
-          searchNearby(pt, radiusKm * 1000)
-          firstFix = false
-        }
+
+        setLocating(false)
+        setLocated(true)
+        searchNearby(pt, radiusKm * 1000)
       },
       (err) => {
+        setLocating(false)
         const messages = {
           1: 'Accès à la position refusé. Autorise la géolocalisation dans les réglages du navigateur.',
           2: 'Position indisponible. Vérifie ta connexion ou réessaie.',
@@ -164,8 +154,6 @@ export default function App() {
       },
       { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
     )
-    watchIdRef.current = id
-    setTracking(true)
   }
 
   async function searchNearby(pt, radiusMeters) {
@@ -354,9 +342,9 @@ export default function App() {
         </div>
 
         <div className="locate-bar">
-          <button id="locateBtn" onClick={toggleTracking} className={tracking ? 'active' : ''}>
-            <span className={`radar ${tracking ? 'spin' : ''}`}></span>
-            <span>{tracking ? 'Suivi GPS actif — arrêter' : 'Activer le GPS'}</span>
+          <button id="locateBtn" onClick={locateOnce} disabled={locating || located}>
+            <span className={`radar ${locating ? 'spin' : ''}`}></span>
+            <span>{locating ? 'Localisation…' : located ? 'Position détectée' : 'Activer le GPS'}</span>
           </button>
         </div>
 
