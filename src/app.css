@@ -150,3 +150,17 @@ header { padding: 22px 20px 16px; background: linear-gradient(180deg, var(--asph
 
 .profile-divider { height: 1px; background: var(--line); margin: 26px 0 20px; }
 .profile-body h3 { font-family: 'Oswald'; font-size: 15px; margin: 0 0 14px; }
+
+.p-badge.community { color: #4a9eff; background: #17324d; }
+.verified-badge { background: #17324d; color: #4a9eff; font-weight: 600; }
+.ticket-actions-row { display: flex; gap: 8px; padding: 0 14px 12px; }
+.ticket-actions-row .directions-btn { flex: 1; margin: 0; }
+.confirm-btn { flex: 1; background: var(--asphalt-2); border: 1px solid var(--signal-dim); border-radius: 6px; color: var(--signal); font-family: 'Oswald'; font-weight: 600; font-size: 12px; padding: 8px; cursor: pointer; }
+.popup-badge { margin-top: 6px; font-size: 11px; color: #4a9eff; font-weight: 600; }
+.popup-directions { display: block; margin-top: 8px; text-align: center; background: var(--signal); color: #1a1a1a; border-radius: 6px; padding: 6px; font-family: 'Oswald'; font-weight: 600; font-size: 12px; text-decoration: none; }
+
+.menu-btn { background: var(--concrete); border: 1px solid var(--line); border-radius: 8px; width: 40px; height: 40px; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; cursor: pointer; }
+.menu-btn span { display: block; width: 18px; height: 2px; background: var(--ink); border-radius: 2px; }
+
+.profile-msg.ok { color: var(--free); }
+.profile-msg.err { color: var(--danger); }

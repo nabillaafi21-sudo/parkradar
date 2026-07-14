@@ -54,6 +54,7 @@ export default function Profile({ session, onClose, onRadiusPreference }) {
     setAvatarUrl(urlWithCacheBust)
     await supabase.from('profiles').update({ avatar_url: urlWithCacheBust }).eq('id', session.user.id)
     setUploading(false)
+    setSaveMsg('Photo de profil mise à jour.')
   }
 
   async function saveProfile() {
@@ -155,7 +156,7 @@ export default function Profile({ session, onClose, onRadiusPreference }) {
               />
             </div>
 
-            {saveMsg && <p className="profile-msg">{saveMsg}</p>}
+            {saveMsg && <p className={`profile-msg ${saveMsg.startsWith('Erreur') ? 'err' : 'ok'}`}>{saveMsg}</p>}
             <button className="btn-save full" onClick={saveProfile} disabled={saving}>
               {saving ? 'Enregistrement…' : 'Enregistrer le profil'}
             </button>
@@ -181,7 +182,7 @@ export default function Profile({ session, onClose, onRadiusPreference }) {
                 placeholder="Retape le mot de passe"
               />
             </div>
-            {pwMsg && <p className="profile-msg">{pwMsg}</p>}
+            {pwMsg && <p className={`profile-msg ${pwMsg.startsWith('Erreur') || pwMsg.includes('ne correspondent') || pwMsg.includes('6 caractères') ? 'err' : 'ok'}`}>{pwMsg}</p>}
             <button className="btn-save full" onClick={changePassword} disabled={pwSaving}>
               {pwSaving ? 'Mise à jour…' : 'Changer le mot de passe'}
             </button>

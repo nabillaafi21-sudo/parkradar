@@ -107,7 +107,14 @@ export default function App() {
   }
 
   function addMarker(spot) {
-    const color = spot.type === 'free' ? '#4cc38a' : spot.type === 'paid' ? '#ef9d4e' : '#a7a49b'
+    const color =
+      spot.source === 'community'
+        ? '#4a9eff'
+        : spot.type === 'free'
+        ? '#4cc38a'
+        : spot.type === 'paid'
+        ? '#ef9d4e'
+        : '#a7a49b'
     const icon = L.divIcon({
       className: '',
       html: `<div style="width:22px;height:22px;border-radius:50% 50% 50% 0;background:${color};transform:rotate(-45deg);border:2px solid #16181c;display:flex;align-items:center;justify-content:center;"><span style="transform:rotate(45deg);color:#16181c;font-weight:700;font-size:11px;font-family:Oswald;">P</span></div>`,
@@ -117,7 +124,12 @@ export default function App() {
     const marker = L.marker([spot.lat, spot.lng], { icon }).addTo(leafletMap.current)
     const priceText = spot.price ? ` — ${spot.price}` : ''
     const typeLabel = spot.type === 'free' ? 'Gratuit' : spot.type === 'paid' ? 'Payant' : 'Type non précisé'
-    marker.bindPopup(`<b>${spot.name}</b><br>${typeLabel}${priceText}`)
+    const badge = spot.source === 'community' ? '<div class="popup-badge">✓ Confirmé par la communauté</div>' : ''
+    marker.bindPopup(
+      `<b>${spot.name}</b><br>${typeLabel}${priceText}${badge}<a class="popup-directions" href="${directionsUrl(
+        spot
+      )}" target="_blank" rel="noreferrer">Itinéraire →</a>`
+    )
     markersRef.current.push(marker)
   }
 
@@ -407,11 +419,15 @@ export default function App() {
       setStatus("Erreur lors de l'ajout : " + error.message)
       setStatusErr(true)
     } else {
-      addMarker({ name, type: formType, price: formPrice, lat: latlng.lat, lng: latlng.lng })
-      setSpots((prev) =>
-        [
-          ...prev,
+      addMarker({ name, type: formType, price: formPrice, lat: latlng.lat, lng: latlng.lng, source: 'community' })
+      setSpots((prev) => {
+        const withoutConfirmed = confirmingSpotId.current
+          ? prev.filter((s) => s.id !== confirmingSpotId.current)
+          : prev
+        return [
+          ...withoutConfirmed,
           {
+            id: 'confirmed_' + Date.now(),
             name,
             type: formType,
             price: formPrice,
@@ -421,7 +437,10 @@ export default function App() {
             _dist: userPos ? haversine(userPos.lat, userPos.lng, latlng.lat, latlng.lng) : 0,
           },
         ].sort((a, b) => a._dist - b._dist)
-      )
+      })
+      confirmingSpotId.current = null
+      setStatus('Parking confirmé et ajouté à la carte pour tout le monde.')
+      setStatusErr(false)
     }
     closeSheet()
   }
@@ -433,6 +452,7 @@ export default function App() {
     setFormType('free')
     setAddressQuery('')
     setAddressResults([])
+    confirmingSpotId.current = null
     setSheetOpen(false)
   }
 
@@ -448,8 +468,10 @@ export default function App() {
             <h1>ParkRadar</h1>
             <p>Connecté en tant que {session.user.email}</p>
           </div>
-          <button className="logout" onClick={() => setProfileOpen(true)}>
-            Profil
+          <button className="menu-btn" onClick={() => setProfileOpen(true)} aria-label="Menu">
+            <span></span>
+            <span></span>
+            <span></span>
           </button>
         </div>
 
@@ -501,7 +523,7 @@ export default function App() {
           spots.map((s) => (
             <div className="ticket" key={s.id || s.name + s.lat}>
               <div className="ticket-top" onClick={() => focusSpot(s)}>
-                <div className={`p-badge ${s.type}`}>P</div>
+                <div className={`p-badge ${s.source === 'community' ? 'community' : s.type}`}>P</div>
                 <div className="ticket-info">
                   <p className="name">{s.name}</p>
                   <div className="meta">
@@ -509,7 +531,7 @@ export default function App() {
                       {s.type === 'free' ? 'Gratuit' : s.type === 'paid' ? 'Payant' : 'Type non précisé'}
                     </span>
                     {s.price && <span>{s.price}</span>}
-                    {s.source === 'community' && <span>Communauté</span>}
+                    {s.source === 'community' && <span className="verified-badge">✓ Confirmé</span>}
                     {s.source === 'tomtom' && <span>TomTom</span>}
                   </div>
                 </div>
@@ -518,15 +540,28 @@ export default function App() {
                   <small>{Math.max(1, Math.round(s._dist / 80))} min</small>
                 </div>
               </div>
-              <a
-                className="directions-btn"
-                href={directionsUrl(s)}
-                target="_blank"
-                rel="noreferrer"
-                onClick={(e) => e.stopPropagation()}
-              >
-                Itinéraire
-              </a>
+              <div className="ticket-actions-row">
+                <a
+                  className="directions-btn"
+                  href={directionsUrl(s)}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  Itinéraire
+                </a>
+                {s.type === 'unknown' && (
+                  <button
+                    className="confirm-btn"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      confirmSpot(s)
+                    }}
+                  >
+                    Confirmer le tarif
+                  </button>
+                )}
+              </div>
               <div className="ticket-torn"></div>
             </div>
           ))
