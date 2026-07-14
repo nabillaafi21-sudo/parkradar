@@ -47,6 +47,7 @@ export default function App() {
   const markersRef = useRef([])
   const pendingLatLng = useRef(null)
   const pendingMarkerRef = useRef(null)
+  const confirmingSpotId = useRef(null)
   const addressDebounce = useRef(null)
 
   useEffect(() => {
@@ -200,7 +201,7 @@ export default function App() {
             const tags = el.tags || {}
             const isLane = tags['parking:lane:both'] || tags['parking:lane:left'] || tags['parking:lane:right']
             const fee = tags.fee
-            const type = isLane ? 'free' : fee === 'no' ? 'free' : fee === 'yes' ? 'paid' : 'free'
+            const type = isLane ? 'free' : fee === 'no' ? 'free' : 'paid'
             return {
               id: 'osm_' + el.type + el.id,
               name: tags.name || (isLane ? 'Stationnement en rue' : 'Parking'),
@@ -238,7 +239,7 @@ export default function App() {
               return {
                 id: 'tomtom_' + r.id,
                 name: r.poi?.name || 'Parking',
-                type: 'unknown',
+                type: 'paid',
                 price: '',
                 lat,
                 lng,
@@ -316,6 +317,14 @@ export default function App() {
     setPending(userPos)
     setAddressQuery('')
     setAddressResults([])
+  }
+
+  function confirmSpot(spot) {
+    confirmingSpotId.current = spot.id
+    setPending({ lat: spot.lat, lng: spot.lng })
+    setFormName(spot.name === 'Parking' || spot.name === 'Stationnement en rue' ? '' : spot.name)
+    setFormType('free')
+    setSheetOpen(true)
   }
 
   async function saveParking() {
