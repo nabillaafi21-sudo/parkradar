@@ -68,10 +68,6 @@ export default function App() {
       attribution: '&copy; OpenStreetMap &copy; CARTO',
     }).addTo(map)
     L.control.zoom({ position: 'bottomright' }).addTo(map)
-    map.on('click', (e) => {
-      setPending(e.latlng)
-      setSheetOpen(true)
-    })
     leafletMap.current = map
   }, [session])
 
@@ -282,6 +278,15 @@ export default function App() {
     }).addTo(leafletMap.current)
   }, [radiusKm, userPos])
 
+  function recenter() {
+    if (!userPos || !leafletMap.current) {
+      setStatus('Active le GPS pour pouvoir te recentrer.')
+      setStatusErr(true)
+      return
+    }
+    leafletMap.current.setView([userPos.lat, userPos.lng], 16)
+  }
+
   function focusSpot(spot) {
     if (!leafletMap.current) return
     leafletMap.current.setView([spot.lat, spot.lng], 17)
@@ -463,7 +468,9 @@ export default function App() {
 
       <div className="map-wrap">
         <div ref={mapRef} id="map"></div>
-        <div className="map-hint">Touche la carte pour signaler un parking</div>
+        <button className="recenter-btn" onClick={recenter} aria-label="Recentrer sur ma position">
+          <span className="recenter-dot"></span>
+        </button>
       </div>
 
       <div className="legend">
@@ -520,7 +527,7 @@ export default function App() {
         <div className="sheet-overlay open" onClick={(e) => e.target === e.currentTarget && closeSheet()}>
           <div className="sheet">
             <h2>Signaler un parking</h2>
-            <p className="hint">Recherche une adresse, utilise ta position, ou touche la carte.</p>
+            <p className="hint">Recherche une adresse ou utilise ta position actuelle.</p>
 
             <div className="field">
               <label>Adresse</label>
